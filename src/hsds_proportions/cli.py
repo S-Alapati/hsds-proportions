@@ -9,7 +9,7 @@ from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 
 from . import __version__, external
-from .motifs import DEFAULT_EXCLUSIONS, build_motif_set, load_families, parse_exclusion
+from .motifs import build_motif_set, list_presets, load_definition, load_preset, parse_exclusion
 from .pipeline import Settings, process_bam
 from .summary import ErrorModel
 
@@ -71,16 +71,20 @@ def build_parser() -> argparse.ArgumentParser:
                             help="score the input as given, for BAMs that are already filtered")
 
     motif = parser.add_argument_group("motif definition")
-    motif.add_argument("--min-spacer", type=int, default=7,
-                       help="shortest spacer between the two half sites")
-    motif.add_argument("--max-spacer", type=int, default=7,
-                       help="longest spacer between the two half sites")
+    motif.add_argument("--preset", metavar="NAME",
+                       help=f"bundled motif definition, one of: {', '.join(list_presets())}")
     motif.add_argument("--motifs", type=Path, metavar="JSON",
-                       help="motif families in JSON, replacing the WW2842 defaults")
+                       help="motif definition from a file, instead of a preset")
+    motif.add_argument("--list-presets", action="store_true",
+                       help="describe the bundled presets and exit")
+    motif.add_argument("--min-spacer", type=int, metavar="N",
+                       help="override the shortest spacer for every family")
+    motif.add_argument("--max-spacer", type=int, metavar="N",
+                       help="override the longest spacer for every family")
     motif.add_argument("--exclude", action="append", metavar="SEQ:OFFSET",
                        help="sequence context whose calls are discarded, repeatable")
     motif.add_argument("--no-default-exclusions", action="store_true",
-                       help="drop the built in CGCAG, CCAGG and GGACC exclusions")
+                       help="drop the exclusion contexts that come with the preset")
     motif.add_argument("--mod-code", default="A+a.",
                        help="modification code to read from the MM tag")
     motif.add_argument("--annotate-kept-only", action="store_true",
@@ -95,8 +99,9 @@ def build_parser() -> argparse.ArgumentParser:
                          help="motif count at which the higher share is required")
 
     reporting = parser.add_argument_group("reporting")
-    reporting.add_argument("--genome-size", type=int, default=2_300_000, metavar="BP",
-                           help="genome length used for the estimated depth column, 0 to omit it")
+    reporting.add_argument("--genome-size", type=int, metavar="BP",
+                           help="genome length for the estimated depth column, 0 to omit it "
+                                "(defaults to the value in the motif definition, if it has one)")
     reporting.add_argument("--barcode-accuracy", type=float, default=0.999, metavar="P",
                            help="probability a read is demultiplexed correctly")
     reporting.add_argument("--error-model-bases", type=int, default=5, metavar="N",
@@ -118,17 +123,30 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def settings_from_args(args: argparse.Namespace) -> Settings:
-    families = load_families(args.motifs) if args.motifs else None
-    exclusions = [] if args.no_default_exclusions else list(DEFAULT_EXCLUSIONS)
+    if args.motifs:
+        definition = load_definition(args.motifs)
+        label = str(args.motifs)
+    else:
+        definition = load_preset(args.preset)
+        label = args.preset
+
+    families = definition["families"]
+    if args.min_spacer is not None or args.max_spacer is not None:
+        for spec in families.values():
+            spec.pop("spacer", None)
+            if args.min_spacer is not None:
+                spec["min_spacer"] = args.min_spacer
+            if args.max_spacer is not None:
+                spec["max_spacer"] = args.max_spacer
+
+    exclusions = [] if args.no_default_exclusions else [tuple(e) for e in definition.get("exclusions", [])]
     for text in args.exclude or []:
         exclusions.append(parse_exclusion(text))
 
-    motif_set = build_motif_set(
-        families=families,
-        min_spacer=args.min_spacer,
-        max_spacer=args.max_spacer,
-        exclusions=exclusions,
-    )
+    motif_set = build_motif_set(families, exclusions=exclusions, name=label)
+    log.info("scoring with %s", motif_set.describe())
+
+    genome_size = definition.get("genome_size") if args.genome_size is None else args.genome_size
     return Settings(
         motif_set=motif_set,
         output_dir=args.output_dir,
@@ -136,7 +154,7 @@ def settings_from_args(args: argparse.Namespace) -> Settings:
         min_probability=args.min_probability,
         min_mean_quality=args.min_quality,
         threads=max(1, args.threads),
-        genome_size=args.genome_size or None,
+        genome_size=genome_size or None,
         error_model=ErrorModel(args.barcode_accuracy, args.error_model_bases),
         high_threshold=args.dominance_high,
         low_threshold=args.dominance_low,
@@ -153,6 +171,20 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     level = logging.DEBUG if args.verbose else logging.WARNING if args.quiet else logging.INFO
     logging.basicConfig(level=level, format="%(levelname)s %(message)s")
+
+    if args.list_presets:
+        for name in list_presets():
+            definition = load_preset(name)
+            print(f"{name}\n    {definition.get('name', '')}")
+            print(f"    alleles: {', '.join(definition['families'])}")
+            if definition.get("reference"):
+                print(f"    {definition['reference']}")
+        return 0
+
+    if not args.preset and not args.motifs:
+        log.error("choose a motif definition with --preset or --motifs")
+        log.error("bundled presets: %s (see --list-presets)", ", ".join(list_presets()))
+        return 2
 
     needed = ["samtools"]
     if not args.skip_quality_filter:

@@ -6,25 +6,38 @@ import pytest
 
 from hsds_proportions.assign import AMBIGUOUS, UNASSIGNED, MotifHit, assign_allele, find_motifs
 from hsds_proportions.modifications import annotation_string, filter_calls, parse_mm_ml
-from hsds_proportions.motifs import build_motif_set, parse_exclusion
+from hsds_proportions.motifs import (
+    build_motif_set,
+    list_presets,
+    load_preset,
+    parse_exclusion,
+    reverse_complement,
+    to_regex,
+)
 from hsds_proportions.summary import ErrorModel, proportions
 
 
+WW2842 = {
+    "N1C1": {"fwd": "TCA{spacer}TGT", "rev": "ACA{spacer}TGA", "spacer": 7},
+    "N2C2": {"fwd": "GTAY{spacer}TTA", "rev": "TAA{spacer}RTAC", "spacer": 6},
+}
+
+
 def test_spacer_length_is_respected():
-    motifs = build_motif_set(min_spacer=7, max_spacer=7)
+    motifs = build_motif_set(WW2842, min_spacer=7, max_spacer=7)
     pattern, _ = motifs.patterns["N1C1_Fwd"]
     assert pattern.search("TCA" + "A" * 7 + "TGT")
     assert not pattern.search("TCA" + "A" * 6 + "TGT")
 
 
 def test_spacer_will_not_match_an_ambiguous_base():
-    motifs = build_motif_set()
+    motifs = build_motif_set(WW2842)
     pattern, _ = motifs.patterns["N1C1_Fwd"]
     assert not pattern.search("TCA" + "A" * 6 + "N" + "TGT")
 
 
 def test_motif_is_only_reported_when_the_adenine_is_methylated():
-    motifs = build_motif_set()
+    motifs = build_motif_set(WW2842)
     sequence = "GG" + "TCA" + "ACGTACG" + "TGT" + "GG"
     annotation = "." * len(sequence)
     assert find_motifs(sequence, set(), annotation, motifs) == []
@@ -114,3 +127,49 @@ def test_exclusions_are_parsed_and_validated():
         parse_exclusion("CCAGG:9")
     with pytest.raises(ValueError):
         parse_exclusion("CCAXG:2")
+
+
+def test_iupac_codes_become_character_classes():
+    assert to_regex("GTAY{spacer}TGT", 6, 6) == "GTA[CT][ACGT]{6,6}TGT"
+    assert to_regex("ACA{spacer}RTAC", 6, 6) == "ACA[ACGT]{6,6}[AG]TAC"
+
+
+def test_a_degenerate_position_is_enforced():
+    motifs = build_motif_set({"N2C1": {"fwd": "GTAY{spacer}TGT", "spacer": 6}})
+    pattern, _ = motifs.patterns["N2C1_Fwd"]
+    assert pattern.search("GTAC" + "A" * 6 + "TGT")
+    assert pattern.search("GTAT" + "A" * 6 + "TGT")
+    assert not pattern.search("GTAA" + "A" * 6 + "TGT")
+
+
+def test_reverse_complement_keeps_the_spacer_in_place():
+    assert reverse_complement("GTAY{spacer}TGT") == "ACA{spacer}RTAC"
+    assert reverse_complement("TCA{spacer}TTA") == "TAA{spacer}TGA"
+
+
+def test_a_missing_reverse_motif_is_derived():
+    motifs = build_motif_set({"X": {"fwd": "TCA{spacer}TTA", "spacer": 7}})
+    pattern, _ = motifs.patterns["X_Rev"]
+    assert pattern.search("TAA" + "C" * 7 + "TGA")
+
+
+def test_families_may_set_their_own_spacer():
+    motifs = build_motif_set(WW2842)
+    assert motifs.spacers == {"N1C1": (7, 7), "N2C2": (6, 6)}
+
+
+def test_every_preset_compiles():
+    for name in list_presets():
+        definition = load_preset(name)
+        motif_set = build_motif_set(
+            definition["families"],
+            exclusions=[tuple(e) for e in definition.get("exclusions", [])],
+            name=name,
+        )
+        assert motif_set.family_names
+
+
+def test_the_corrected_preset_uses_true_reverse_complements():
+    families = load_preset("ww2842")["families"]
+    for name, spec in families.items():
+        assert spec["rev"] == reverse_complement(spec["fwd"]), name

@@ -7,9 +7,11 @@ authors:
     given-names: Susanth
 repository-code: "https://github.com/S-Alapati/hsds-proportions"
 abstract: >-
-  Assigns Oxford Nanopore reads to hsdS alleles of a Type I
-  restriction-modification shufflon using the 6mA recognition motifs each
-  allele leaves, and reports the proportion of the population carrying each.
+  Assigns Oxford Nanopore reads to the hsdS alleles of a Type I
+  restriction-modification shufflon using the 6mA recognition motif each allele
+  leaves, and reports the proportion of the population carrying each. Motifs,
+  spacer lengths and allele counts are configurable, so any bacterium with a
+  comparable locus can be scored.
 keywords:
   - nanopore
   - methylation

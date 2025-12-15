@@ -1,0 +1,21 @@
+{
+  "name": "Two-domain Type I system, template",
+  "reference": "A starting point for any organism. Replace the half sites with the motifs reported by NanoMotif or MEME for each phase-locked strain, set the spacer, and delete or add families as the locus requires. Reverse motifs are derived automatically when omitted.",
+  "exclusions": [],
+  "families": {
+    "allele_A": {
+      "fwd": "NNN{spacer}NNN",
+      "spacer": 6,
+      "offsets": [
+        2
+      ]
+    },
+    "allele_B": {
+      "fwd": "NNN{spacer}NNN",
+      "spacer": 6,
+      "offsets": [
+        2
+      ]
+    }
+  }
+}

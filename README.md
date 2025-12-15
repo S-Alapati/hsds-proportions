@@ -1,16 +1,26 @@
-# hsds-proportions
+<p align="center">
+  <img src="docs/logo.png" alt="hsds-proportions" width="640">
+</p>
 
-Type I restriction-modification systems with a shufflon-type *hsdS* locus switch
-specificity by recombining their target recognition domains, so a clonal culture
-is really a mixture of cells carrying different alleles. Each allele leaves a
-different 6mA recognition motif on the DNA, which means a long read carrying
-methylation calls reports the allele of the cell it came from.
+<p align="center">
+  <em>Work out which hsdS allele each long read came from, and how much of the
+  population is carrying it.</em>
+</p>
 
-This tool reads a modified-basecalled BAM, assigns each read to an allele from
-the motifs it carries, and reports what proportion of the population each allele
-accounts for. It was written for *Porphyromonas gingivalis* WW2842, whose *hsdS*
-locus produces four alleles (N1C1, N1C2, N2C1 and N2C2), but the motif
-definitions are configurable and any comparable locus can be scored.
+---
+
+Many bacteria carry a Type I restriction-modification system whose specificity
+subunit sits in a shufflon: the target recognition domains recombine, so a
+single colony is a mixture of cells carrying different *hsdS* alleles. Each
+allele methylates a different recognition motif, which means a long read with
+its 6mA calls intact reports the allele of the cell it came from.
+
+This tool reads a modified-basecalled BAM, assigns every read to an allele from
+the motifs it carries, and reports the share of the population each allele
+accounts for. Nothing in it is specific to one organism. The motifs, the spacer
+length, the number of alleles and the sequence contexts to ignore are all
+configurable, and *Porphyromonas gingivalis* WW2842 ships as one preset among
+others.
 
 ## What it does
 
@@ -19,21 +29,11 @@ definitions are configurable and any comparable locus can be scored.
    filter runs as a round trip rather than in place.
 2. Walks the MM and ML tags of every read, keeps the 6mA calls above a
    probability threshold and outside the excluded sequence contexts, and looks
-   for the recognition motif of each allele with a methylated adenine at the
-   expected offset. Reads are written to one BAM per allele.
-3. Totals the bases behind each allele with NanoStat and writes a summary table
-   of proportions.
+   for each allele's recognition motif with a methylated adenine at the expected
+   offset. Reads are written to one BAM per allele.
+3. Totals the bases behind each allele with NanoStat and writes a summary table.
 
 ## Installation
-
-The Python package:
-
-```bash
-pip install git+https://github.com/S-Alapati/hsds-proportions.git
-```
-
-Samtools, Filtlong and NanoStat have to be on PATH. The easiest way to get all
-four is conda:
 
 ```bash
 conda env create -f environment.yml
@@ -41,57 +41,106 @@ conda activate hsds-proportions
 pip install -e .
 ```
 
-## Usage
+Samtools, Filtlong and NanoStat have to be on PATH. The conda environment brings
+all three. If you already have them, `pip install .` on its own is enough.
 
-Score every BAM in a directory with the defaults used for WW2842:
-
-```bash
-hsds-proportions /path/to/bams -o results
-```
-
-Score two files, keep only calls at probability 240 or above, and give samtools
-eight threads:
+## Quick start
 
 ```bash
-hsds-proportions barcode05.bam barcode10.bam -o results -p 240 -t 8
+hsds-proportions --list-presets                       # see what is bundled
+hsds-proportions /path/to/bams --preset ww2842 -o results -t 8
 ```
 
-Process eight barcodes at once, four samtools threads each:
+There is no default preset. Either `--preset` or `--motifs` has to be given, so
+that nobody scores their *Klebsiella* run with someone else's motifs by
+accident.
+
+A few more ways to run it:
 
 ```bash
-hsds-proportions /path/to/bams -o results -j 8 -t 4
+# two files, a lower probability floor, eight samtools threads
+hsds-proportions bc05.bam bc10.bam --preset ww2842 -p 240 -t 8 -o results
+
+# eight barcodes at once, four samtools threads each
+hsds-proportions /path/to/bams --preset ww2842 -j 8 -t 4 -o results
+
+# your own motifs, and a BAM that is already quality filtered
+hsds-proportions filtered.bam --motifs my_system.json --skip-quality-filter
 ```
 
-Rescore a BAM that has already been quality filtered:
+## Defining the motifs for your organism
 
-```bash
-hsds-proportions filtered.bam --skip-quality-filter -o results
+A definition is a JSON document. The minimum is a forward motif per allele, with
+`{spacer}` marking the unconstrained run between the two half sites:
+
+```json
+{
+  "name": "My organism, hsdS locus",
+  "genome_size": 4600000,
+  "exclusions": [["CCAGG", 2], ["CCWGG", 2]],
+  "families": {
+    "alleleA": {"fwd": "GTAY{spacer}TGT", "spacer": 6, "offsets": [2]},
+    "alleleB": {"fwd": "GTAY{spacer}TTA", "spacer": 6, "offsets": [2]},
+    "alleleC": {"fwd": "TCA{spacer}TGT",  "spacer": 7, "offsets": [2]}
+  }
+}
 ```
 
-`hsds-proportions --help` lists every option. The ones worth knowing about:
+Points worth knowing:
+
+- **IUPAC codes work everywhere.** `GTAY{spacer}TGT` requires a pyrimidine at
+  position 4. Half sites of real Type I systems are often degenerate and writing
+  them out as plain ACGT silently loosens the motif.
+- **The reverse motif is derived if you leave it out**, as the reverse
+  complement of the forward one. Give `rev` explicitly only if you mean
+  something that is not the reverse complement, and expect a warning if so.
+- **Each allele can set its own spacer.** Two domains of the same system often
+  space their half sites differently, so `spacer`, or `min_spacer` and
+  `max_spacer` for a range, is read per family. `--min-spacer` and
+  `--max-spacer` on the command line override all of them.
+- **`offsets` is where the methylated adenine sits** within the match, counting
+  from zero. A motif is only counted when one of those positions carries a 6mA
+  call that passed the filters.
+- **As many alleles as the locus has.** Four is what a two-by-two shufflon gives
+  you, but nothing assumes that number.
+- `genome_size` and `exclusions` are optional defaults that `--genome-size` and
+  `--exclude` override.
+
+`hsds-proportions --list-presets` prints what ships with the package, and
+`src/hsds_proportions/presets/template.json` is a skeleton to copy.
+
+If you do not know your motifs yet, get them first: run each phase-locked strain
+through NanoMotif or MEME and use the motifs it reports. This tool assigns reads
+to motifs you already trust, it does not discover them.
+
+## Options
 
 | Option | Default | What it controls |
 | --- | --- | --- |
+| `--preset`, `--motifs` | none, one required | Where the motif definition comes from |
 | `-q, --min-quality` | 99.0 | Mean read accuracy as a percentage, passed to Filtlong |
 | `-p, --min-probability` | 255 | Lowest 6mA probability accepted, on the 0 to 255 ML scale |
-| `--min-spacer`, `--max-spacer` | 7, 7 | Length of the unconstrained run between the two half sites |
-| `--motifs` | built in | JSON file of motif families, for a different locus |
-| `--exclude` | see below | Sequence context whose calls are discarded, repeatable |
-| `--dominance-high/low/switch` | 0.90, 0.75, 5 | How dominant one family has to be before a read is assigned |
-| `--genome-size` | 2300000 | Genome length behind the estimated depth column |
+| `--min-spacer`, `--max-spacer` | from the definition | Override the spacer for every allele |
+| `--exclude SEQ:OFFSET` | from the definition | Extra context whose calls are discarded, repeatable |
+| `--mod-code` | `A+a.` | Modification code read from the MM tag |
+| `--dominance-high/low/switch` | 0.90, 0.75, 5 | How dominant one allele has to be before a read is assigned |
+| `--genome-size` | from the definition | Genome length behind the estimated depth column, 0 to omit |
 | `-t, --threads` | 1 | Threads handed to samtools |
 | `-j, --jobs` | 1 | Input files processed at once |
+| `--skip-quality-filter` | off | Score the input as given |
+| `--no-summary` | off | Skip NanoStat and write no summary table |
+
+`hsds-proportions --help` has the rest.
 
 ## Output
 
-One directory per input BAM, named after the sample and the thresholds used, for
-example `barcode05_Q99_P255/`:
+One directory per input BAM, named after the sample and the thresholds used:
 
 | File | Contents |
 | --- | --- |
 | `*_Q99_filtered.bam` | Reads that passed the accuracy filter |
-| `*_N1C1.bam` and the other three | Reads assigned to each allele |
-| `*_Ambiguous.bam` | Reads carrying motifs from more than one family with no clear majority |
+| `*_<allele>.bam` | Reads assigned to each allele, one file each |
+| `*_Ambiguous.bam` | Reads carrying motifs from more than one allele with no clear majority |
 | `*_Other.bam` | Reads with no 6mA calls, no motifs, or no MM tag |
 | `*_motifs.tsv` | Every motif occurrence, with its sequence and methylation pattern |
 | `*_summary_report.tsv` | Read and base counts per allele, proportions, error rate |
@@ -101,53 +150,48 @@ sitting in an excluded context, and `.` an unmodified base.
 
 ## How a read is assigned
 
-A read carrying motifs from one family only goes to that family. Where more than
-one family is represented, one of them has to account for most of the
-occurrences: 90% on reads with at least five motifs, 75% below that, on the
-grounds that a handful of motifs is weak evidence and a single miscalled base
-should not decide the allele. Reads that clear neither bar are written to the
-ambiguous file rather than forced into a call, and they are left out of the
-proportions.
-
-## Scoring a different locus
-
-Motif families are a JSON mapping, one entry per allele, with the spacer written
-as `{spacer}` and the offsets at which the methylated adenine is expected:
-
-```json
-{
-  "N1C1": {"fwd": "TCA{spacer}TGT", "rev": "ACA{spacer}TGA", "offsets": [2]},
-  "N2C2": {"fwd": "GTA{spacer}TTA", "rev": "TAA{spacer}TAC", "offsets": [2]}
-}
-```
-
-Pass it with `--motifs my_motifs.json`. `examples/ww2842_motifs.json` holds the
-built in definitions as a starting point.
-
-Three sequence contexts are excluded by default, `CGCAG` with the adenine at
-offset 3, `CCAGG` at offset 2 and `GGACC` at offset 2. They produce 6mA calls
-that have nothing to do with the Type I system and would otherwise be counted.
-Add others with `--exclude SEQ:OFFSET`, or clear the list with
-`--no-default-exclusions`.
+A read carrying motifs from one allele only goes to that allele. Where more than
+one is represented, one of them has to account for most of the occurrences: 90%
+on reads with at least five motifs, 75% below that, on the grounds that a
+handful of motifs is weak evidence and one miscalled base should not decide the
+call. Reads that clear neither bar go to the ambiguous file rather than being
+forced into an allele, and they are left out of the proportions.
 
 ## The error rate column
 
-The summary reports a single error rate per assigned read, the complement of
-three probabilities multiplied together: correct demultiplexing, correct
-basecalling across the informative bases of the motif, and a correct methylation
-call. With the defaults, `0.999 x 0.99^5 x 1.0`, this gives 4.9961%.
+The summary reports one error rate per assigned read, the complement of three
+probabilities multiplied together: correct demultiplexing, correct basecalling
+across the informative bases of the motif, and a correct methylation call. With
+the defaults, `0.999 x 0.99^5 x 1.0`, that is 4.9961%.
 
-Two things to be aware of before quoting it. The exponent is the number of
-fixed bases flanking the methylated adenine rather than the full motif length,
-on the basis that a miscall in the spacer does not change which family a read
-matches. And the methylation term is the probability threshold expressed as a
-fraction of 255, which at the default of 255 contributes nothing. Both are set
-by `--error-model-bases` and `--barcode-accuracy` if a different treatment suits
-your data better.
+Two things to be aware of before quoting it. The exponent is the number of fixed
+bases flanking the methylated adenine rather than the full motif length, on the
+basis that a miscall in the spacer does not change which allele a read matches.
+And the methylation term is the probability threshold as a fraction of 255,
+which at the default of 255 contributes nothing. Both are set by
+`--error-model-bases` and `--barcode-accuracy`.
 
 The estimated depth column divides the bases assigned to an allele by the whole
 genome length, so it is a genome-equivalent depth and understates coverage at
 the locus itself. Set `--genome-size 0` to leave it out.
+
+## A note for WW2842 users
+
+Two presets cover *P. gingivalis* WW2842 and they do not give the same answer:
+
+- **`ww2842`** uses the motifs as reported: a pyrimidine at position 4 of the N2
+  half site with a six base spacer, seven bases for N1, and reverse motifs that
+  are true reverse complements of the forward ones. Use this for new work.
+- **`ww2842-as-published`** reproduces the original script exactly, including a
+  seven base spacer for all four alleles, no pyrimidine constraint, and an N1C2
+  reverse motif of `TAA{spacer}TCA`. That is not the reverse complement of the
+  N1C2 forward motif `TCA{spacer}TTA`, which is `TAA{spacer}TGA`, so
+  reverse-strand N1C2 motifs were missed and an unrelated sequence was counted
+  in their place. It is kept only so earlier counts can be reproduced, and it
+  logs a warning when it loads.
+
+If you have published proportions from the original script, rerun with both and
+compare before citing either. N1C2 is the allele affected.
 
 ## Known behaviour
 
@@ -160,17 +204,20 @@ below the probability threshold, which is how the original analysis was run.
 the pattern string in the TSV only, never which reads are assigned where.
 
 Reads are assigned on the motifs they happen to span, so short reads carry less
-evidence than long ones. Proportions are reported on a base basis as well as a
-read basis for that reason, and the two are worth comparing.
+evidence than long ones. Proportions are reported per read and per base for that
+reason, and the two are worth comparing.
 
 ## Requirements
 
 Python 3.9 or later with pysam, plus samtools, Filtlong and NanoStat on PATH.
 
+```bash
+pytest          # the logic that does not need pysam or the external tools
+```
+
 ## Citation
 
-If this is useful in published work please cite the repository and the
-manuscript it was written for. See `CITATION.cff`.
+See `CITATION.cff`.
 
 ## Licence
 

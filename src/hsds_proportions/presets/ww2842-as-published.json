@@ -1,0 +1,53 @@
+{
+  "name": "P. gingivalis WW2842, as originally scored",
+  "reference": "Reproduces the original script exactly, including a seven base spacer for all four families, no pyrimidine constraint on the N2 half site, and an N1C2 reverse motif of TAA{spacer}TCA. That reverse motif is not the reverse complement of the N1C2 forward motif; it is kept here only so published counts can be reproduced. Use the ww2842 preset for new work.",
+  "genome_size": 2300000,
+  "exclusions": [
+    [
+      "CGCAG",
+      3
+    ],
+    [
+      "CCAGG",
+      2
+    ],
+    [
+      "GGACC",
+      2
+    ]
+  ],
+  "families": {
+    "N1C1": {
+      "fwd": "TCA{spacer}TGT",
+      "rev": "ACA{spacer}TGA",
+      "spacer": 7,
+      "offsets": [
+        2
+      ]
+    },
+    "N1C2": {
+      "fwd": "TCA{spacer}TTA",
+      "rev": "TAA{spacer}TCA",
+      "spacer": 7,
+      "offsets": [
+        2
+      ]
+    },
+    "N2C1": {
+      "fwd": "GTA{spacer}TGT",
+      "rev": "ACA{spacer}TAC",
+      "spacer": 7,
+      "offsets": [
+        2
+      ]
+    },
+    "N2C2": {
+      "fwd": "GTA{spacer}TTA",
+      "rev": "TAA{spacer}TAC",
+      "spacer": 7,
+      "offsets": [
+        2
+      ]
+    }
+  }
+}

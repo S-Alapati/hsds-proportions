@@ -1,95 +1,167 @@
 """Motif definitions and the regexes built from them.
 
-An hsdS allele is called from the recognition motif its methyltransferase
-leaves behind. Each family is a pair of palindromic half sites separated by a
-run of unconstrained bases, so the regex is assembled at run time once the
-spacer length is known.
+A Type I system recognises a bipartite site: two short half sites, each read by
+one target recognition domain, separated by a run of unconstrained bases. Swap a
+domain and the half site it reads changes, so the motif is what tells you which
+allele a cell is carrying.
+
+Motifs are written with IUPAC codes and ``{spacer}`` where the unconstrained run
+falls, for example ``GTAY{spacer}TGT``. Nothing here is specific to any one
+organism; the built in definitions are presets like any other.
 """
 
 from __future__ import annotations
 
 import json
+import logging
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass
+from importlib import resources
 from pathlib import Path
 
-#: Motif families of the WW2842 hsdS shufflon. Each entry gives the forward and
-#: reverse strand recognition sequence with the spacer written as ``{spacer}``,
-#: and the offsets within the match at which the adenine is expected to carry
-#: the 6mA call.
-DEFAULT_FAMILIES: dict[str, dict] = {
-    "N1C1": {"fwd": "TCA{spacer}TGT", "rev": "ACA{spacer}TGA", "offsets": [2]},
-    "N2C2": {"fwd": "GTA{spacer}TTA", "rev": "TAA{spacer}TAC", "offsets": [2]},
-    "N1C2": {"fwd": "TCA{spacer}TTA", "rev": "TAA{spacer}TCA", "offsets": [2]},
-    "N2C1": {"fwd": "GTA{spacer}TGT", "rev": "ACA{spacer}TAC", "offsets": [2]},
+log = logging.getLogger(__name__)
+
+#: IUPAC nucleotide codes and the bases each one stands for.
+IUPAC = {
+    "A": "A", "C": "C", "G": "G", "T": "T",
+    "R": "AG", "Y": "CT", "S": "CG", "W": "AT", "K": "GT", "M": "AC",
+    "B": "CGT", "D": "AGT", "H": "ACT", "V": "ACG", "N": "ACGT",
 }
 
-#: Sequence contexts whose 6mA calls are discarded before motifs are scored,
-#: given as (context, offset of the adenine within the context). These are the
-#: Dam and Dcm-like contexts that produce calls unrelated to the Type I system.
-DEFAULT_EXCLUSIONS: list[tuple[str, int]] = [("CGCAG", 3), ("CCAGG", 2), ("GGACC", 2)]
+COMPLEMENT = str.maketrans("ACGTRYSWKMBDHVN", "TGCAYRSWMKVHDBN")
+
+SPACER_TOKEN = "{spacer}"
+
+
+def reverse_complement(motif: str) -> str:
+    """Reverse complement a motif, leaving the spacer token where it belongs."""
+    if SPACER_TOKEN in motif:
+        head, _, tail = motif.partition(SPACER_TOKEN)
+        return f"{reverse_complement(tail)}{SPACER_TOKEN}{reverse_complement(head)}"
+    return motif.upper().translate(COMPLEMENT)[::-1]
+
+
+def to_regex(motif: str, min_spacer: int, max_spacer: int) -> str:
+    """Turn an IUPAC motif into a regular expression.
+
+    Every position becomes an explicit character class, so an N in the basecall
+    never matches and cannot inflate the counts.
+    """
+    spacer = f"[ACGT]{{{min_spacer},{max_spacer}}}"
+    parts = []
+    # Split on the token before changing case, or the placeholder is mangled.
+    for segment in motif.split(SPACER_TOKEN):
+        rendered = ""
+        for base in segment.upper():
+            if base not in IUPAC:
+                raise ValueError(f"{base!r} in {motif!r} is not an IUPAC code")
+            bases = IUPAC[base]
+            rendered += bases if len(bases) == 1 else f"[{bases}]"
+        parts.append(rendered)
+    return spacer.join(parts)
 
 
 @dataclass(frozen=True)
 class MotifSet:
-    """Compiled motif patterns for one spacer setting."""
+    """Compiled patterns for one set of alleles."""
 
     patterns: dict[str, tuple[re.Pattern, tuple[int, ...]]]
     exclusions: tuple[tuple[str, int], ...]
-    min_spacer: int
-    max_spacer: int
-    families: tuple[str, ...] = field(default=())
+    families: tuple[str, ...]
+    spacers: dict[str, tuple[int, int]]
+    name: str = "custom"
 
     @property
     def family_names(self) -> tuple[str, ...]:
         return self.families
 
+    def describe(self) -> str:
+        spans = {f"{lo}-{hi}" if lo != hi else str(lo) for lo, hi in self.spacers.values()}
+        return f"{self.name}: {len(self.families)} alleles, spacer {', '.join(sorted(spans))}"
+
 
 def build_motif_set(
-    families: dict[str, dict] | None = None,
+    families: dict[str, dict],
     min_spacer: int = 7,
     max_spacer: int = 7,
     exclusions: list[tuple[str, int]] | None = None,
+    name: str = "custom",
+    check_complements: bool = True,
 ) -> MotifSet:
-    """Compile the forward and reverse pattern for every family.
+    """Compile the forward and reverse pattern for every allele.
 
-    The spacer is a character class rather than a wildcard so that an N in the
-    basecall never matches, which would otherwise inflate the counts.
+    ``min_spacer`` and ``max_spacer`` apply to any family that does not set its
+    own. A family may override them, which is needed when the two domains of a
+    system space their half sites differently.
     """
-    families = families or DEFAULT_FAMILIES
-    exclusions = DEFAULT_EXCLUSIONS if exclusions is None else exclusions
-
     if min_spacer < 0 or max_spacer < min_spacer:
         raise ValueError(f"invalid spacer range {min_spacer}-{max_spacer}")
 
-    spacer = f"[ACGT]{{{min_spacer},{max_spacer}}}"
     patterns: dict[str, tuple[re.Pattern, tuple[int, ...]]] = {}
+    spacers: dict[str, tuple[int, int]] = {}
 
-    for name, spec in families.items():
-        missing = {"fwd", "rev"} - set(spec)
-        if missing:
-            raise ValueError(f"family {name} is missing {sorted(missing)}")
+    for family, spec in families.items():
+        if "fwd" not in spec:
+            raise ValueError(f"family {family} has no forward motif")
+        forward = spec["fwd"]
+        # A reverse motif can be given explicitly, or derived where the site is
+        # read the same way on both strands, which is the usual case.
+        reverse = spec.get("rev") or reverse_complement(forward)
+
+        if check_complements and spec.get("rev"):
+            expected = reverse_complement(forward)
+            if expected.upper() != spec["rev"].upper():
+                log.warning(
+                    "family %s: reverse motif %s is not the reverse complement of %s "
+                    "(expected %s). This is allowed, but check it is deliberate.",
+                    family, spec["rev"], forward, expected,
+                )
+
+        low = int(spec.get("min_spacer", spec.get("spacer", min_spacer)))
+        high = int(spec.get("max_spacer", spec.get("spacer", max_spacer)))
+        if high < low:
+            raise ValueError(f"family {family} has an invalid spacer range {low}-{high}")
+        spacers[family] = (low, high)
+
         offsets = tuple(spec.get("offsets", [2]))
-        for strand in ("fwd", "rev"):
-            label = f"{name}_{'Fwd' if strand == 'fwd' else 'Rev'}"
-            patterns[label] = (re.compile(spec[strand].format(spacer=spacer)), offsets)
+        for label, motif in ((f"{family}_Fwd", forward), (f"{family}_Rev", reverse)):
+            patterns[label] = (re.compile(to_regex(motif, low, high)), offsets)
 
     return MotifSet(
         patterns=patterns,
-        exclusions=tuple(tuple(e) for e in exclusions),
-        min_spacer=min_spacer,
-        max_spacer=max_spacer,
+        exclusions=tuple(tuple(e) for e in (exclusions or [])),
         families=tuple(families),
+        spacers=spacers,
+        name=name,
     )
 
 
-def load_families(path: str | Path) -> dict[str, dict]:
-    """Read motif families from JSON, so a different locus can be scored."""
+# --- presets -------------------------------------------------------------
+
+def _preset_dir():
+    return resources.files(__package__) / "presets"
+
+
+def list_presets() -> list[str]:
+    """Names of the bundled presets."""
+    return sorted(p.name[:-5] for p in _preset_dir().iterdir() if p.name.endswith(".json"))
+
+
+def load_preset(name: str) -> dict:
+    path = _preset_dir() / f"{name}.json"
+    if not path.is_file():
+        raise ValueError(f"unknown preset {name!r}, available: {', '.join(list_presets())}")
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def load_definition(path: str | Path) -> dict:
+    """Read a motif definition from a JSON file."""
     with open(path, encoding="utf-8") as handle:
-        families = json.load(handle)
-    if not isinstance(families, dict) or not families:
-        raise ValueError(f"{path} does not contain a motif family mapping")
-    return families
+        data = json.load(handle)
+    if not isinstance(data, dict) or not data:
+        raise ValueError(f"{path} does not contain a motif definition")
+    # Allow either a bare mapping of families or a full definition document.
+    return data if "families" in data else {"families": data}
 
 
 def parse_exclusion(text: str) -> tuple[str, int]:
@@ -98,8 +170,9 @@ def parse_exclusion(text: str) -> tuple[str, int]:
     sequence = sequence.strip().upper()
     if not sequence or not offset:
         raise ValueError(f"exclusion {text!r} should look like CCAGG:2")
-    if set(sequence) - set("ACGT"):
-        raise ValueError(f"exclusion {sequence!r} contains a non-ACGT base")
+    unknown = set(sequence) - set(IUPAC)
+    if unknown:
+        raise ValueError(f"exclusion {sequence!r} contains {sorted(unknown)}")
     index = int(offset)
     if not 0 <= index < len(sequence):
         raise ValueError(f"offset {index} falls outside {sequence!r}")
