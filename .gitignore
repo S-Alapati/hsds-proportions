@@ -1,0 +1,17 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.venv/
+.pytest_cache/
+.ruff_cache/
+
+# analysis outputs
+hsds_results/
+*_results/
+*.bam
+*.bam.bai
+*.fastq
+*_summary_report.tsv
+*_motifs.tsv

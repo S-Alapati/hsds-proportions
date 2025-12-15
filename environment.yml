@@ -1,0 +1,13 @@
+name: hsds-proportions
+channels:
+  - conda-forge
+  - bioconda
+dependencies:
+  - python>=3.9
+  - pysam>=0.21
+  - samtools>=1.17
+  - filtlong>=0.2.1
+  - nanostat>=1.6
+  - pip
+  - pip:
+      - -e .
