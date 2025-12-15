@@ -7,7 +7,7 @@ allele a cell is carrying.
 
 Motifs are written with IUPAC codes and ``{spacer}`` where the unconstrained run
 falls, for example ``GTAY{spacer}TGT``. Nothing here is specific to any one
-organism; the built in definitions are presets like any other.
+organism: the motifs come from a definition file you supply.
 """
 
 from __future__ import annotations
@@ -122,6 +122,15 @@ def build_motif_set(
         if high < low:
             raise ValueError(f"family {family} has an invalid spacer range {low}-{high}")
         spacers[family] = (low, high)
+
+        # A motif with no fixed base matches every read, which is almost always
+        # an unedited skeleton rather than a real definition.
+        fixed = [b for segment in forward.split(SPACER_TOKEN) for b in segment.upper() if b != "N"]
+        if not fixed:
+            raise ValueError(
+                f"family {family} has no fixed base outside the spacer, so it would match "
+                "every read. Replace the placeholder half sites with real motifs."
+            )
 
         offsets = tuple(spec.get("offsets", [2]))
         for label, motif in ((f"{family}_Fwd", forward), (f"{family}_Rev", reverse)):

@@ -6,9 +6,12 @@ import pytest
 
 from hsds_proportions.assign import AMBIGUOUS, UNASSIGNED, MotifHit, assign_allele, find_motifs
 from hsds_proportions.modifications import annotation_string, filter_calls, parse_mm_ml
+from pathlib import Path
+
 from hsds_proportions.motifs import (
     build_motif_set,
     list_presets,
+    load_definition,
     load_preset,
     parse_exclusion,
     reverse_complement,
@@ -17,55 +20,58 @@ from hsds_proportions.motifs import (
 from hsds_proportions.summary import ErrorModel, proportions
 
 
-WW2842 = {
-    "N1C1": {"fwd": "TCA{spacer}TGT", "rev": "ACA{spacer}TGA", "spacer": 7},
-    "N2C2": {"fwd": "GTAY{spacer}TTA", "rev": "TAA{spacer}RTAC", "spacer": 6},
+EXAMPLE = {
+    "alleleA": {"fwd": "TCA{spacer}TGT", "rev": "ACA{spacer}TGA", "spacer": 7},
+    "alleleB": {"fwd": "GTAY{spacer}TTA", "rev": "TAA{spacer}RTAC", "spacer": 6},
 }
 
 
 def test_spacer_length_is_respected():
-    motifs = build_motif_set(WW2842, min_spacer=7, max_spacer=7)
-    pattern, _ = motifs.patterns["N1C1_Fwd"]
+    motifs = build_motif_set(EXAMPLE, min_spacer=7, max_spacer=7)
+    pattern, _ = motifs.patterns["alleleA_Fwd"]
     assert pattern.search("TCA" + "A" * 7 + "TGT")
     assert not pattern.search("TCA" + "A" * 6 + "TGT")
 
 
 def test_spacer_will_not_match_an_ambiguous_base():
-    motifs = build_motif_set(WW2842)
-    pattern, _ = motifs.patterns["N1C1_Fwd"]
+    motifs = build_motif_set(EXAMPLE)
+    pattern, _ = motifs.patterns["alleleA_Fwd"]
     assert not pattern.search("TCA" + "A" * 6 + "N" + "TGT")
 
 
 def test_motif_is_only_reported_when_the_adenine_is_methylated():
-    motifs = build_motif_set(WW2842)
+    motifs = build_motif_set(EXAMPLE)
     sequence = "GG" + "TCA" + "ACGTACG" + "TGT" + "GG"
     annotation = "." * len(sequence)
     assert find_motifs(sequence, set(), annotation, motifs) == []
     hits = find_motifs(sequence, {4}, annotation, motifs)
-    assert [h.family for h in hits] == ["N1C1"]
+    assert [h.family for h in hits] == ["alleleA"]
     assert hits[0].sequence == "TCAACGTACGTGT"
 
 
+FAMILIES = ("alleleA", "alleleB", "alleleC", "alleleD")
+
+
+def _hits(family, count):
+    return [MotifHit(family, f"{family}_Fwd", "", "")] * count
+
+
 def test_a_read_with_one_family_is_assigned_to_it():
-    families = ("N1C1", "N2C2", "N1C2", "N2C1")
-    hits = [MotifHit("N1C1", "N1C1_Fwd", "", "")] * 3
-    assert assign_allele(hits, families) == "N1C1"
+    assert assign_allele(_hits("alleleA", 3), FAMILIES) == "alleleA"
 
 
 def test_a_clear_majority_wins_once_there_are_enough_motifs():
-    families = ("N1C1", "N2C2", "N1C2", "N2C1")
-    hits = [MotifHit("N1C1", "N1C1_Fwd", "", "")] * 9 + [MotifHit("N2C2", "N2C2_Fwd", "", "")]
-    assert assign_allele(hits, families) == "N1C1"
+    hits = _hits("alleleA", 9) + _hits("alleleB", 1)
+    assert assign_allele(hits, FAMILIES) == "alleleA"
 
 
 def test_a_split_read_is_held_as_ambiguous():
-    families = ("N1C1", "N2C2", "N1C2", "N2C1")
-    hits = [MotifHit("N1C1", "N1C1_Fwd", "", "")] * 3 + [MotifHit("N2C2", "N2C2_Fwd", "", "")] * 3
-    assert assign_allele(hits, families) == AMBIGUOUS
+    hits = _hits("alleleA", 3) + _hits("alleleB", 3)
+    assert assign_allele(hits, FAMILIES) == AMBIGUOUS
 
 
 def test_a_read_without_motifs_is_unassigned():
-    assert assign_allele([], ("N1C1",)) == UNASSIGNED
+    assert assign_allele([], FAMILIES) == UNASSIGNED
 
 
 def test_mm_deltas_land_on_the_right_adenines():
@@ -105,18 +111,24 @@ def test_annotation_marks_kept_and_excluded_differently():
 
 
 def test_proportions_sum_to_one_hundred():
-    shares = proportions({"N1C1": 80, "N2C2": 20})
-    assert shares == {"N1C1": 80.0, "N2C2": 20.0}
+    shares = proportions({"alleleA": 80, "alleleB": 20})
+    assert shares == {"alleleA": 80.0, "alleleB": 20.0}
 
 
 def test_proportions_of_nothing_are_zero():
-    assert proportions({"N1C1": 0, "N2C2": 0}) == {"N1C1": 0.0, "N2C2": 0.0}
+    assert proportions({"alleleA": 0, "alleleB": 0}) == {"alleleA": 0.0, "alleleB": 0.0}
 
 
-def test_error_model_reproduces_the_published_value():
-    # Q99 with a probability floor of 255 gave 4.9961% in the WW2842 analysis.
+def test_the_error_model_multiplies_its_three_terms():
+    # 1 - (0.999 * 0.99^5 * 1.0), as a percentage.
     rate = ErrorModel().error_rate(mean_accuracy_pct=99.0, min_probability=255.0)
     assert rate == pytest.approx(4.9961, abs=1e-4)
+
+
+def test_a_lower_probability_floor_raises_the_error_rate():
+    strict = ErrorModel().error_rate(99.0, 255.0)
+    loose = ErrorModel().error_rate(99.0, 200.0)
+    assert loose > strict
 
 
 def test_exclusions_are_parsed_and_validated():
@@ -135,8 +147,8 @@ def test_iupac_codes_become_character_classes():
 
 
 def test_a_degenerate_position_is_enforced():
-    motifs = build_motif_set({"N2C1": {"fwd": "GTAY{spacer}TGT", "spacer": 6}})
-    pattern, _ = motifs.patterns["N2C1_Fwd"]
+    motifs = build_motif_set({"alleleX": {"fwd": "GTAY{spacer}TGT", "spacer": 6}})
+    pattern, _ = motifs.patterns["alleleX_Fwd"]
     assert pattern.search("GTAC" + "A" * 6 + "TGT")
     assert pattern.search("GTAT" + "A" * 6 + "TGT")
     assert not pattern.search("GTAA" + "A" * 6 + "TGT")
@@ -154,22 +166,30 @@ def test_a_missing_reverse_motif_is_derived():
 
 
 def test_families_may_set_their_own_spacer():
-    motifs = build_motif_set(WW2842)
-    assert motifs.spacers == {"N1C1": (7, 7), "N2C2": (6, 6)}
+    motifs = build_motif_set(EXAMPLE)
+    assert motifs.spacers == {"alleleA": (7, 7), "alleleB": (6, 6)}
 
 
-def test_every_preset_compiles():
-    for name in list_presets():
-        definition = load_preset(name)
-        motif_set = build_motif_set(
-            definition["families"],
-            exclusions=[tuple(e) for e in definition.get("exclusions", [])],
-            name=name,
-        )
-        assert motif_set.family_names
+def test_the_worked_example_compiles():
+    definition = load_definition(Path(__file__).parent.parent / "examples" / "four_allele_example.json")
+    motif_set = build_motif_set(
+        definition["families"],
+        exclusions=[tuple(e) for e in definition.get("exclusions", [])],
+        name="example",
+    )
+    assert len(motif_set.family_names) == 4
+    assert motif_set.spacers["alleleC"] == (6, 6)
 
 
-def test_the_corrected_preset_uses_true_reverse_complements():
-    families = load_preset("ww2842")["families"]
-    for name, spec in families.items():
-        assert spec["rev"] == reverse_complement(spec["fwd"]), name
+def test_a_motif_of_only_ns_is_rejected():
+    with pytest.raises(ValueError, match="no fixed base"):
+        build_motif_set({"skeleton": {"fwd": "NNN{spacer}NNN", "spacer": 6}})
+
+
+def test_the_bundled_template_is_a_skeleton_and_will_not_run():
+    with pytest.raises(ValueError, match="no fixed base"):
+        build_motif_set(load_preset("template")["families"])
+
+
+def test_a_preset_is_bundled_for_copying():
+    assert "template" in list_presets()

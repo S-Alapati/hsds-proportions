@@ -1,0 +1,45 @@
+{
+  "name": "Worked example, a four-allele shufflon",
+  "reference": "Two N-terminal half sites and two C-terminal half sites recombining into four alleles. The N-terminal domains differ in spacer length, and one carries a degenerate position. Replace every motif with your own before using this.",
+  "genome_size": 4600000,
+  "exclusions": [
+    [
+      "CCWGG",
+      2
+    ],
+    [
+      "GATC",
+      1
+    ]
+  ],
+  "families": {
+    "alleleA": {
+      "fwd": "TCA{spacer}TGT",
+      "spacer": 7,
+      "offsets": [
+        2
+      ]
+    },
+    "alleleB": {
+      "fwd": "TCA{spacer}TTA",
+      "spacer": 7,
+      "offsets": [
+        2
+      ]
+    },
+    "alleleC": {
+      "fwd": "GTAY{spacer}TGT",
+      "spacer": 6,
+      "offsets": [
+        2
+      ]
+    },
+    "alleleD": {
+      "fwd": "GTAY{spacer}TTA",
+      "spacer": 6,
+      "offsets": [
+        2
+      ]
+    }
+  }
+}

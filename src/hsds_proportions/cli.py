@@ -35,9 +35,7 @@ def collect_inputs(paths: list[Path], pattern: str) -> list[Path]:
 
     keep = []
     for bam in found:
-        if bam.name.endswith(OUTPUT_SUFFIXES) or any(
-            bam.stem.endswith(f"_{tag}") for tag in ("N1C1", "N1C2", "N2C1", "N2C2", "Ambiguous", "Other")
-        ):
+        if bam.name.endswith(OUTPUT_SUFFIXES) or bam.stem.endswith(("_Ambiguous", "_Other")):
             log.debug("skipping %s, it looks like an output of a previous run", bam.name)
             continue
         keep.append(bam)
@@ -71,10 +69,10 @@ def build_parser() -> argparse.ArgumentParser:
                             help="score the input as given, for BAMs that are already filtered")
 
     motif = parser.add_argument_group("motif definition")
+    motif.add_argument("--motifs", type=Path, metavar="JSON",
+                       help="motif definition for your organism, see --list-presets for a skeleton")
     motif.add_argument("--preset", metavar="NAME",
                        help=f"bundled motif definition, one of: {', '.join(list_presets())}")
-    motif.add_argument("--motifs", type=Path, metavar="JSON",
-                       help="motif definition from a file, instead of a preset")
     motif.add_argument("--list-presets", action="store_true",
                        help="describe the bundled presets and exit")
     motif.add_argument("--min-spacer", type=int, metavar="N",
@@ -182,8 +180,8 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if not args.preset and not args.motifs:
-        log.error("choose a motif definition with --preset or --motifs")
-        log.error("bundled presets: %s (see --list-presets)", ", ".join(list_presets()))
+        log.error("give a motif definition for your organism with --motifs")
+        log.error("run --list-presets for a skeleton to copy, or see examples/")
         return 2
 
     needed = ["samtools"]
@@ -203,7 +201,11 @@ def main(argv: list[str] | None = None) -> int:
         return 1
     log.info("found %d BAM file(s)", len(bams))
 
-    settings = settings_from_args(args)
+    try:
+        settings = settings_from_args(args)
+    except (ValueError, OSError, KeyError) as error:
+        log.error("%s", error)
+        return 2
     args.output_dir.mkdir(parents=True, exist_ok=True)
 
     if args.jobs > 1 and len(bams) > 1:

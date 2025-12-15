@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
-# Create the GitHub repository and push this directory to it.
-# Run once from inside the hsds-proportions folder, after checking the name in
-# LICENSE and CITATION.cff.
+# One-time bootstrap: create the GitHub repository and push this directory to it.
+# After the first push, use git add / commit / push as normal.
 set -euo pipefail
 
 REPO="${1:-hsds-proportions}"
@@ -21,16 +20,13 @@ done
 
 [ -d .git ] || git init -b main
 git add -A
-git commit -m "hsds-proportions: assign long reads to hsdS alleles from their 6mA motifs
+git diff --cached --quiet || git commit -m "hsds-proportions: assign long reads to hsdS alleles from their 6mA motifs
 
-Motifs, spacer lengths, exclusion contexts and allele counts are configurable,
-so any bacterium with a Type I restriction-modification shufflon can be scored.
-IUPAC codes are supported, reverse motifs are derived as reverse complements
-unless given, and each allele may set its own spacer.
-
-Two presets cover P. gingivalis WW2842: ww2842 uses the motifs as reported, and
-ww2842-as-published reproduces the original script including an N1C2 reverse
-motif that is not the reverse complement of its forward motif."
+Motifs, spacer lengths, exclusion contexts and allele counts come from a JSON
+definition supplied by the user, so any bacterium with a Type I
+restriction-modification shufflon can be scored. IUPAC codes are supported,
+reverse motifs are derived as reverse complements unless given explicitly, and
+each allele may set its own spacer."
 
 gh repo create "$REPO" "$VISIBILITY" --source=. --remote=origin --push
 echo "Done: https://github.com/${ACCOUNT}/${REPO}"

@@ -15,10 +15,10 @@ class ErrorModel:
     per assigned read.
 
     ``core_bases`` is the number of positions treated as informative. The
-    published WW2842 analysis used five, the count of fixed bases either side
-    of the methylated adenine, rather than the full motif length, on the basis
-    that the spacer is unconstrained and a miscall there does not change the
-    family the read is assigned to.
+    default of five counts the fixed bases either side of the methylated
+    adenine rather than the full motif length, on the basis that the spacer is
+    unconstrained and a miscall there does not change which family a read
+    matches. Set it to whatever suits your motif.
     """
 
     barcode_accuracy: float = 0.999
